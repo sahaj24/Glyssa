@@ -8,7 +8,7 @@ import fs from 'fs';
 
 // Use the service account key file path or environment variable
 // The service account key is loaded dynamically from a file or from credentials directly
-const keyFilePath = '/Users/sahaj/Documents/glyssa-v/glyssa/credentials/google-credentials.json';
+const keyFilePath = '/Users/sahaj/Documents/glyssa-v/glyssa/new-google-credentials.json';
 console.log('Attempting to use credentials file at:', keyFilePath);
 
 // You can also set the GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable with the entire JSON content
@@ -171,16 +171,44 @@ export async function POST(request: NextRequest) {
       
       console.log('Google TTS API response received');
       
-      // Return the audio content as a base64 string
-      if (response.audioContent) {
+      // Return the audio content as a base64 string with validation
+      if (response.audioContent && response.audioContent.length > 0) {
         console.log('Audio content received, length:', response.audioContent.length);
-        const base64Audio = Buffer.from(response.audioContent as Buffer).toString('base64');
-        console.log('Converted to base64, length:', base64Audio.length);
         
-        return NextResponse.json({
-          audio: base64Audio,
-          success: true
-        });
+        // Validate audio content before converting to base64
+        if (response.audioContent.length < 100) {
+          console.warn('Audio content suspiciously small, might be invalid');
+          return NextResponse.json(
+            { error: 'Invalid audio content received from Google TTS API', success: false },
+            { status: 500 }
+          );
+        }
+        
+        try {
+          const base64Audio = Buffer.from(response.audioContent as Buffer).toString('base64');
+          console.log('Converted to base64, length:', base64Audio.length);
+          
+          // Validate base64 string
+          if (base64Audio.length % 4 !== 0) {
+            console.warn('Generated base64 string length is not a multiple of 4, which may indicate corruption');
+          }
+          
+          // Log a preview of the base64 data for debugging
+          console.log('Base64 preview:', 
+            `Start: ${base64Audio.substring(0, 20)}...`, 
+            `End: ...${base64Audio.substring(base64Audio.length - 20)}`);
+          
+          return NextResponse.json({
+            audio: base64Audio,
+            success: true
+          });
+        } catch (error) {
+          console.error('Error converting audio content to base64:', error);
+          return NextResponse.json(
+            { error: 'Error processing audio data', success: false },
+            { status: 500 }
+          );
+        }
       } else {
         console.error('No audio content in response');
         return NextResponse.json(

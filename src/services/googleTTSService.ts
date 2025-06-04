@@ -333,199 +333,65 @@ async function synthesizeSpeech(text: string, voiceOptions: VoiceOptions = defau
   try {
     // Get the base URL for API calls based on the current environment
     const baseURL = window.location.origin;
-    
-    // First try a test API call to verify API routes are working
-    try {
-      const testResponse = await fetch(`${baseURL}/api/test`, {
-        method: 'GET'
-      });
-      
-      if (testResponse.ok) {
-        const testData = await testResponse.json();
-        console.log('Test API response:', testData);
-      } else {
-        console.warn(`API test route failed with status: ${testResponse.status}`);
-        console.warn('Next.js API routes may not be properly configured');
-      }
-    } catch (testError) {
-      console.error('API test route error:', testError);
-    }
-    
     const apiURL = `${baseURL}/api/tts`;
     
-    console.log(`Calling TTS API at: ${apiURL}`);
-    
-    // Try to fetch from the API endpoint with full URL path
+    console.log(`Calling TTS API at: ${apiURL} with payload:`, {
+      textLength: payload.text.length, // payload is defined above
+      voiceOptions: payload.voiceOptions.name
+    });
+
     const response = await fetch(apiURL, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload), // Use the payload defined earlier
     });
-    
-    // Check for quota exceeded errors first
-    if (response.status === 429) {
-      // Set a quota exceeded state for 5 minutes to avoid making more API calls
-      speechState.quotaExceededUntil = Date.now() + (5 * 60 * 1000); // 5 minutes
-      recordFailure('Quota exceeded (429)');
-      console.warn('Google TTS API quota exceeded, silently falling back to browser Web Speech API');
-      return `tts-fallback-${Date.now()}`;
-    }
-    
+
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`Google TTS API error (${response.status}):`, errorText);
+      console.error(`TTS API error (${response.status}):`, errorText);
+      recordFailure(`API error (${response.status}): ${errorText.substring(0, 100)}`);
+      return `tts-fallback-${Date.now()}`; // Return fallback ID
+    }
+
+    // Parse the response as JSON to get the audio data
+    const responseData = await response.json();
+
+    if (responseData.success && responseData.audio && responseData.audio.length > 0) {
+      console.log('TTS API response received successfully, audio data length:', responseData.audio.length);
+      console.log('Audio data snippet (first 40 chars):', responseData.audio.substring(0, 40), '...');
       
-      // More detailed diagnostic logging
-      console.error('API failure details:', {
-        status: response.status,
-        statusText: response.statusText,
-        url: response.url,
-        headers: Object.fromEntries(response.headers.entries()),
-        errorTextLength: errorText?.length || 0
-      });
-      
-      // Check specifically for routing issues (404)
-      if (response.status === 404) {
-        console.error('API route not found - Next.js API routing issue detected');
-        console.info('Try checking if your Next.js API routes are properly set up');
-        console.info('Make sure /api/tts/route.ts exists and is configured correctly');
+      // Validate the base64 string
+      if (responseData.audio.length % 4 !== 0) {
+        console.warn('TTS API response: Base64 data length is not a multiple of 4, which may indicate corruption');
       }
       
-      recordFailure(`API error (${response.status}): ${errorText.substring(0, 100)}${errorText.length > 100 ? '...' : ''}`);
+      // Check if the base64 string contains valid characters
+      const base64Regex = /^[A-Za-z0-9+/=]+$/;
+      if (!base64Regex.test(responseData.audio)) {
+        console.warn('TTS API response: Base64 data contains invalid characters');
+        recordFailure('Invalid base64 characters in audio data');
+        return `tts-fallback-${Date.now()}`; // Return fallback ID
+      }
       
-      // Fall back to browser TTS since the API call failed
-      console.warn('Falling back to browser TTS due to API failure');
-      return `tts-fallback-${Date.now()}`;
-    }
-    
-    // Parse the response which should have an audio field with base64 data
-    const data = await response.json();
-    if (data.audio) {
       // Success! Reset error counters
       resetErrorState();
-      console.log('Successfully received audio from Google TTS API');
-      return data.audio; // Return the base64 audio content
+      return responseData.audio; // Return the base64 audio content
+    } else if (responseData.error) {
+      console.error('TTS API returned an error:', responseData.error);
+      recordFailure(`API returned error: ${responseData.error}`);
+      return `tts-fallback-${Date.now()}`; // Return fallback ID
+    } else {
+      console.warn('TTS API response does not contain valid audio data');
+      recordFailure('Invalid or missing audio data from API');
+      return `tts-fallback-${Date.now()}`; // Return fallback ID
     }
-    
-    recordFailure('No audio content in response');
-    throw new Error('No audio content in response');
-  } catch (error) {
-    console.warn('Google TTS API failed, falling back to browser Web Speech API:', error);
-    recordFailure(error instanceof Error ? error.message : 'Unknown error');
-    // Return a special ID that will trigger browser Web Speech API fallback
-    return `tts-fallback-${Date.now()}`;
-  }
-}
 
-/**
- * Speak text using Google Cloud TTS API
- * @param text The text to speak
- * @param onLineNumber Callback for line highlighting
- * @param onFinish Callback when speech is complete
- * @param voiceOptions Optional voice configuration
- * @param codeContent Optional code content for line reference extraction
- * @returns Promise resolving to true if successful
- */
-async function speak(
-  text: string,
-  onLineNumber?: (lineNumber: number) => void,
-  onFinish?: () => void,
-  voiceOptions?: VoiceOptions,
-  codeContent?: string
-): Promise<boolean> {
-  // Stop any currently playing speech
-  stop();
-  
-  // Reset state
-  speechState.isPlaying = false;
-  speechState.currentUtterance = null;
-  speechState.lineNumberCallback = onLineNumber || null;
-  speechState.onFinishCallback = onFinish || null;
-  
-  // Validate input
-  if (!text || text.trim() === '') {
-    console.warn('Empty text provided to TTS');
-    if (onFinish) onFinish();
-    return false;
-  }
-  
-  console.log('Starting TTS with text length:', text.length);
-  
-  // Extract line references for highlighting
-  const lineMarkers = extractLineReferences(text, codeContent);
-  console.log('Extracted line markers:', lineMarkers.length);
-  
-  try {
-    // Check if we should use fallback directly
-    if (shouldUseFallbackDirectly()) {
-      console.log('Using Web Speech API fallback directly');
-      useBrowserSpeechAPI(text, speechState, lineMarkers);
-      return true;
-    }
-    
-    // Call the TTS API
-    console.log('Calling Google Cloud TTS API');
-    const audioData = await callGoogleTTSAPI(text, voiceOptions);
-    
-    /**
-     * Call the Google Cloud TTS API to synthesize speech
-     */
-    async function callGoogleTTSAPI(text: string, voiceOptions: VoiceOptions): Promise<ArrayBuffer | string> {
-      try {
-        // Prepare the request to the API route
-        const response = await fetch('/api/tts', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            text,
-            voice: voiceOptions
-          }),
-        });
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('TTS API error:', errorText);
-          return `tts-fallback-${Date.now()}`;
-        }
-        
-        // Get the audio data as ArrayBuffer
-        const audioData = await response.arrayBuffer();
-        return audioData;
-      } catch (error) {
-        console.error('Error calling TTS API:', error);
-        return `tts-fallback-${Date.now()}`;
-      }
-    }
-    
-    // If we got a fallback ID instead of audio data, use browser TTS
-    if (typeof audioData === 'string' && audioData.startsWith('tts-fallback-')) {
-      console.log('Received fallback ID, using Web Speech API');
-      useBrowserSpeechAPI(text, speechState, lineMarkers);
-      return true;
-    }
-    
-    // Play the audio with Google Cloud TTS
-    console.log('Playing audio with Google Cloud TTS');
-    playSpeech(audioData, text, lineMarkers);
-    
-    // Reset error state after successful API call
-    resetErrorState();
-    return true;
   } catch (error) {
-    console.error('Error in speak function:', error);
-    
-    // Record the failure
-    recordFailure(error instanceof Error ? error.message : 'Unknown error');
-    
-    // Fall back to browser TTS
-    console.log('Falling back to Web Speech API after error');
-    useBrowserSpeechAPI(text, speechState, lineMarkers);
-    
-    return false;
+    console.error('Error in synthesizeSpeech during API call:', error);
+    recordFailure(error instanceof Error ? error.message : 'Unknown error in synthesizeSpeech');
+    return `tts-fallback-${Date.now()}`; // Return fallback ID
   }
 }
 
@@ -551,8 +417,85 @@ function playSpeech(audioIdOrData: string | ArrayBuffer, text: string, lineMarke
       let audio: HTMLAudioElement;
       
       if (typeof audioIdOrData === 'string') {
-        // Handle base64 string
-        audio = new Audio(`data:audio/mp3;base64,${audioIdOrData}`);
+        // Handle base64 string with validation
+        if (!audioIdOrData || audioIdOrData.length < 10) {
+          console.error('Google TTS: Invalid or empty base64 audio data');
+          useBrowserSpeechAPI(text, speechState, lineMarkers);
+          return;
+        }
+        
+        // Log the first and last few characters for debugging
+        console.log('Base64 audio data preview:', 
+          `Start: ${audioIdOrData.substring(0, 20)}...`, 
+          `End: ...${audioIdOrData.substring(audioIdOrData.length - 20)}`);
+        
+        // Validate base64 format and content
+        const isValidBase64 = /^[A-Za-z0-9+/=]+$/.test(audioIdOrData);
+        if (!isValidBase64) {
+          console.error('Google TTS: Invalid base64 characters detected in audio data');
+          useBrowserSpeechAPI(text, speechState, lineMarkers);
+          return;
+        }
+        
+        if (audioIdOrData.length % 4 !== 0) {
+          console.warn('Google TTS: Base64 data length is not a multiple of 4, which may indicate corruption');
+          // Try to fix padding if possible
+          const paddingNeeded = 4 - (audioIdOrData.length % 4);
+          if (paddingNeeded < 4) {
+            audioIdOrData = audioIdOrData + '='.repeat(paddingNeeded);
+            console.log('Google TTS: Added padding to base64 data');
+          }
+        }
+        
+        // Use Blob and URL.createObjectURL instead of data URL for better reliability
+        try {
+          // Wrap in try-catch to handle potential decoding errors
+          let byteCharacters;
+          try {
+            byteCharacters = atob(audioIdOrData);
+          } catch (decodeError) {
+            console.error('Google TTS: Failed to decode base64 data:', decodeError);
+            useBrowserSpeechAPI(text, speechState, lineMarkers);
+            return;
+          }
+          
+          // Validate decoded data size
+          if (byteCharacters.length < 100) {
+            console.error('Google TTS: Decoded audio data is suspiciously small, might be invalid');
+            useBrowserSpeechAPI(text, speechState, lineMarkers);
+            return;
+          }
+          
+          const byteNumbers = new Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+          }
+          const byteArray = new Uint8Array(byteNumbers);
+          
+          // Use audio/mpeg MIME type instead of audio/mp3 for better browser compatibility
+          const blob = new Blob([byteArray], { type: 'audio/mpeg' });
+          const url = URL.createObjectURL(blob);
+          audio = new Audio(url);
+          
+          // Add a load event to ensure the audio is properly loaded
+          audio.addEventListener('loadeddata', () => {
+            console.log('Google TTS: Audio data loaded successfully');
+          });
+          
+          // Add error event listener to catch and handle audio loading errors
+          audio.addEventListener('error', (e) => {
+            const errorCode = (audio as any).error?.code || 'unknown';
+            console.error(`Google TTS: Audio loading error (Code ${errorCode})`, e);
+            // Clean up the URL to prevent memory leaks
+            URL.revokeObjectURL(url);
+            // Fall back to browser TTS
+            useBrowserSpeechAPI(text, speechState, lineMarkers);
+          });}
+        } catch (error) {
+          console.error('Google TTS: Error processing base64 audio data:', error);
+          useBrowserSpeechAPI(text, speechState, lineMarkers);
+          return;
+        }
       } else {
         // Handle ArrayBuffer
         const blob = new Blob([audioIdOrData], { type: 'audio/mp3' });
@@ -610,12 +553,30 @@ function playSpeech(audioIdOrData: string | ArrayBuffer, text: string, lineMarke
         // Clear all timers
         timers.forEach(timer => clearTimeout(timer));
         
-        // Clean up URL if we created one for ArrayBuffer
-        if (typeof audioIdOrData !== 'string' && audio.src.startsWith('blob:')) {
+        // Clean up URL if we created one for ArrayBuffer or base64
+        if (audio.src.startsWith('blob:')) {
           URL.revokeObjectURL(audio.src);
         }
         
         if (speechState.onFinishCallback) speechState.onFinishCallback();
+      };
+      
+      // Add error handler for playback errors
+      audio.onerror = (e) => {
+        const errorCode = (audio as any).error?.code || 'unknown';
+        console.error(`Google TTS: Audio playback error (Code ${errorCode})`, e);
+        speechState.isPlaying = false;
+        
+        // Clear all timers
+        timers.forEach(timer => clearTimeout(timer));
+        
+        // Clean up URL
+        if (audio.src.startsWith('blob:')) {
+          URL.revokeObjectURL(audio.src);
+        }
+        
+        // Fall back to browser TTS
+        useBrowserSpeechAPI(text, speechState, lineMarkers);
       };
       
       // Handle audio errors
@@ -1020,7 +981,7 @@ async function useBrowserSpeechAPI(
 
 /**
  * Stop the current speech
- */
+*/
 function stop(): void {
   if (speechState.currentUtterance) {
     // Check if it's an HTMLAudioElement (has pause method) or SpeechSynthesisUtterance
@@ -1276,15 +1237,94 @@ export function extractLineReferences(text: string, codeToValidate?: string): { 
   return [];
 }
 
+async function speak(
+  text: string,
+  onLineNumber?: (lineNumber: number) => void,
+  onFinish?: () => void,
+  voiceOptionsParam?: VoiceOptions,
+  codeContent?: string
+): Promise<boolean> {
+  stop(); // Stop any currently playing speech
+
+  // Initialize speech state for the new session
+  speechState.isPlaying = false;
+  speechState.currentUtterance = null;
+  speechState.lineNumberCallback = onLineNumber || null;
+  speechState.onFinishCallback = onFinish || null;
+  speechState.hasError = false; // Reset error state
+
+  if (!text || text.trim() === '') {
+    console.warn('TTS Service: Empty text provided to speak.');
+    if (speechState.onFinishCallback) speechState.onFinishCallback();
+    return false;
+  }
+
+  console.log('TTS Service: speak called with text length:', text.length);
+
+  // Extract line markers using the existing utility function
+  const lineMarkers = extractLineReferences(text, codeContent);
+  console.log('TTS Service: Extracted line markers:', lineMarkers.length);
+
+  const voiceOptionsToUse = voiceOptionsParam || defaultVoice;
+
+  try {
+    // Check if we should immediately use the fallback (e.g., due to repeated errors)
+    if (shouldUseFallbackDirectly()) {
+      console.log('TTS Service: Using Web Speech API directly due to fallback conditions.');
+      // Pass the original text; useBrowserSpeechAPI will handle its own SSML/marker cleaning.
+      await useBrowserSpeechAPI(text, speechState, lineMarkers);
+      return true;
+    }
+
+    // Attempt to get audio data (base64 string) or a fallback ID from Google TTS via our backend
+    // synthesizeSpeech handles SSML creation and API call.
+    const audioDataOrFallbackId = await synthesizeSpeech(text, voiceOptionsToUse);
+
+    if (typeof audioDataOrFallbackId === 'string' && audioDataOrFallbackId.startsWith('tts-fallback-')) {
+      console.log('TTS Service: Fallback ID received from synthesizeSpeech. Using Web Speech API.');
+      await useBrowserSpeechAPI(text, speechState, lineMarkers);
+    } else if (typeof audioDataOrFallbackId === 'string') {
+      // This is the base64 audio data from Google TTS
+      console.log('TTS Service: Playing Google TTS audio.');
+      // playSpeech expects the original text (with markers) for timing, and the base64 audio data.
+      playSpeech(audioDataOrFallbackId, text, lineMarkers);
+    } else {
+      // This case should ideally not be reached if synthesizeSpeech adheres to Promise<string>
+      console.error('TTS Service: Unexpected data type from synthesizeSpeech. Falling back.');
+      await useBrowserSpeechAPI(text, speechState, lineMarkers);
+    }
+    
+    resetErrorState(); // Reset error counters on successful initiation path
+    return true;
+
+  } catch (error) {
+    console.error('TTS Service: Error in main speak function orchestration:', error);
+    recordFailure(error instanceof Error ? error.message : 'Unknown error in speak orchestration');
+    
+    // Attempt a final fallback in case of unexpected errors in the orchestration logic
+    try {
+      console.warn('TTS Service: Attempting Web Speech API fallback after error in speak orchestration.');
+      await useBrowserSpeechAPI(text, speechState, lineMarkers);
+    } catch (fallbackError) {
+      console.error('TTS Service: Error during final fallback attempt:', fallbackError);
+      // Ensure onFinish is called even if the final fallback fails
+      if (speechState.onFinishCallback) {
+        speechState.onFinishCallback();
+      }
+    }
+    return false; // Indicate that the speak initiation failed
+  }
+}
+
 // Export the service
 const googleTTSService = {
-  speak,
-  stop,
-  isSpeaking,
-  initVoices,
-  getAvailableVoices,
-  setVoice,
-  extractLineReferences
+  speak: speak,
+  stop: stop,
+  isSpeaking: isSpeaking,
+  initVoices: initVoices,
+  getAvailableVoices: getAvailableVoices,
+  setVoice: setVoice,
+  extractLineReferences: extractLineReferences
 };
 
 export default googleTTSService;
