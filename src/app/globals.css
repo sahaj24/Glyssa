@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Glyssa code highlighting styles */
+.highlighted-line {
+  background-color: rgba(65, 105, 225, 0.2) !important;
+  border-left: 3px solid royalblue !important;
+}
+
+.highlighted-text {
+  background-color: rgba(65, 105, 225, 0.3);
+  border-radius: 2px;
+}
+
+/* Animation for line highlighting */
+@keyframes highlight-pulse {
+  0% { background-color: rgba(65, 105, 225, 0.1); }
+  50% { background-color: rgba(65, 105, 225, 0.3); }
+  100% { background-color: rgba(65, 105, 225, 0.1); }
+}
+
+.highlight-animation {
+  animation: highlight-pulse 2s ease-in-out infinite;
+}

@@ -1,0 +1,602 @@
+// Gemini API service for Glyssa
+// This service handles communication with Google's Gemini API
+
+// Import the error handler
+import { handleGeminiApiError } from './geminiErrorHandler';
+
+// Configuration
+// Using the v1beta API with gemini-2.0-flash model exactly as documented
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
+
+// Use API key as URL parameter as an alternative method
+const getApiUrl = () => `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
+
+// Log key prefix to help with debugging (never log the full key)
+console.log('Gemini API Key prefix:', GEMINI_API_KEY ? GEMINI_API_KEY.substring(0, 4) + '...' : 'not set');
+console.log('Gemini API Key length:', GEMINI_API_KEY ? GEMINI_API_KEY.length : 0);
+console.log('Environment variable exists:', process.env.NEXT_PUBLIC_GEMINI_API_KEY ? 'yes' : 'no');
+
+// API retry configuration
+const MAX_RETRIES = 2;          // Maximum number of retries before falling back
+const RETRY_DELAY_MS = 1000;    // Delay between retries in milliseconds
+
+export interface GeminiResponse {
+  text: string;
+  annotations?: {
+    startLine: number;
+    endLine: number;
+    explanation: string;
+  }[];
+}
+
+interface CodeExplanationRequest {
+  code: string;
+  language?: string;
+  request?: string;
+}
+
+/**
+ * Makes a Gemini API call with retry mechanism for handling overloaded models
+ * @param requestBody The request body to send to the Gemini API
+ * @param retryCount Current retry attempt (internal use)
+ * @returns The API response
+ */
+async function callGeminiWithRetry(requestBody: any, retryCount: number = 0): Promise<Response> {
+  try {
+    console.log('Making API call to Gemini...');
+    
+    // Use the API key in the URL instead of as a header
+    const apiUrl = getApiUrl();
+    console.log('Calling Gemini API with URL:', apiUrl.replace(GEMINI_API_KEY, '[REDACTED]'));
+    console.log('API key available for request:', GEMINI_API_KEY ? 'yes' : 'no');
+    console.log('API key length:', GEMINI_API_KEY.length);
+    
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
+    
+    console.log('Gemini API response status:', response.status);
+    
+    // If we get a 503 error and haven't exceeded max retries, try again
+    if (!response.ok && response.status === 503 && retryCount < MAX_RETRIES) {
+      console.log(`Gemini API returned 503, retrying (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+      
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS * (retryCount + 1)));
+      
+      // Retry the API call
+      return callGeminiWithRetry(requestBody, retryCount + 1);
+    }
+    
+    return response;
+  } catch (error) {
+    console.error('Error making Gemini API call:', error);
+    
+    // If we haven't exceeded max retries, try again
+    if (retryCount < MAX_RETRIES) {
+      console.log(`Network error with Gemini API, retrying (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+      
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS * (retryCount + 1)));
+      
+      // Retry the API call
+      return callGeminiWithRetry(requestBody, retryCount + 1);
+    }
+    
+    // Create a mock response to indicate the API call failed
+    const mockResponse = new Response(
+      JSON.stringify({ error: { message: 'API call failed after retries' } }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+    
+    return mockResponse;
+  }
+}
+
+/**
+ * Parse Gemini API response
+ */
+function parseResponse(data: any): GeminiResponse {
+  try {
+    if (!data.candidates || !data.candidates[0] || !data.candidates[0].content || !data.candidates[0].content.parts) {
+      return { text: "Invalid response from AI service." };
+    }
+    
+    const candidate = data.candidates[0];
+    const part = candidate.content.parts[0];
+    
+    return {
+      text: part.text,
+      annotations: extractAnnotations(part.text)
+    };
+  } catch (error) {
+    console.error('Error parsing Gemini response:', error);
+    return { text: "Error processing AI response." };
+  }
+}
+
+/**
+ * Extract line annotations from response text
+ */
+function extractAnnotations(text: string) {
+  const annotations = [];
+  
+  // Match [Line X] or [Lines X-Y] patterns
+  const lineRegex = /\[Line(?:s)?\s+(\d+)(?:-(\d+))?\]/g;
+  let match;
+  
+  while ((match = lineRegex.exec(text)) !== null) {
+    const startLine = parseInt(match[1], 10);
+    
+    // Get the end line if it exists, otherwise use start line
+    const endLine = match[2] ? parseInt(match[2], 10) : startLine;
+    
+    // Get the text after the line annotation until the next line annotation or end of text
+    const nextMatch = lineRegex.exec(text);
+    const endIndex = nextMatch ? nextMatch.index : text.length;
+    lineRegex.lastIndex = match.index + match[0].length; // Reset regex to continue from end of current match
+    
+    // Extract the explanation
+    const explanationStart = match.index + match[0].length;
+    const explanation = text.substring(explanationStart, endIndex).trim();
+    
+    if (startLine && endLine) {
+      annotations.push({
+        startLine,
+        endLine,
+        explanation
+      });
+    }
+  }
+  
+  return annotations.length > 0 ? annotations : undefined;
+}
+
+/**
+ * Generate a fallback explanation when the Gemini API is unavailable
+ */
+function generateFallbackExplanation(code: string, language?: string): string {
+  // Perform code analysis
+  const analysis = analyzeCode(code);
+  
+  // Build a more detailed explanation
+  let explanation = `Sorry, the AI service is currently experiencing high demand. Here's an automated explanation instead:\n\n`;
+  
+  // Use provided language if available, otherwise use the detected one
+  const codeLanguage = language || analysis.language;
+  explanation += `This is a ${codeLanguage} snippet with ${analysis.lineCount} lines.\n\n`;
+  
+  // Add function information if available
+  if (analysis.functions.length > 0) {
+    explanation += `Functions identified: ${analysis.functions.join(', ')}\n\n`;
+  }
+  
+  // Add class information if available
+  if (analysis.classes.length > 0) {
+    explanation += `Classes identified: ${analysis.classes.join(', ')}\n\n`;
+  }
+  
+  // Add import information if available
+  if (analysis.imports.length > 0) {
+    explanation += `Dependencies: ${analysis.imports.join(', ')}\n\n`;
+  }
+  
+  // Add key features if identified
+  if (analysis.keyFeatures.length > 0) {
+    explanation += `Key features: ${analysis.keyFeatures.join(', ')}\n\n`;
+  }
+  
+  // Analyze specific code context based on the current code snippet
+  if (code.includes('console.error') && code.includes('Gemini API error')) {
+    explanation += `This code appears to be handling an error from the Gemini API. It logs the error details to the console and returns an error message to the user.\n\n`;
+  }
+  
+  if (code.includes('response.status === 503')) {
+    explanation += `The code includes specific handling for HTTP 503 errors (Service Unavailable), which typically occur when a service is temporarily overloaded or undergoing maintenance.\n\n`;
+  }
+  
+  explanation += `This is an automated explanation generated when the AI service is unavailable.`;
+  
+  return explanation;
+}
+
+function analyzeCode(code: string): {
+  language: string;
+  lineCount: number;
+  functions: string[];
+  classes: string[];
+  imports: string[];
+  keyFeatures: string[];
+} {
+  const lines = code.split('\n');
+  const lineCount = lines.length;
+  const functions: string[] = [];
+  const classes: string[] = [];
+  const imports: string[] = [];
+  const keyFeatures: string[] = [];
+  
+  // Language detection
+  let language = 'code';
+  if (code.includes('function') || code.includes('const') || code.includes('let') || code.includes('var')) {
+    language = 'JavaScript';
+  } else if (code.includes('def ') || code.includes('import ') && !code.includes('{')) {
+    language = 'Python';
+  } else if (code.includes('public static void main')) {
+    language = 'Java';
+  } else if (code.includes('#include')) {
+    language = 'C/C++';
+  }
+  
+  // Extract function declarations
+  const functionRegex = /(?:function\s+([\w$]+)|(?:const|let|var)\s+([\w$]+)\s*=\s*(?:function|\([^)]*\)\s*=>)|(\\w+)\s*:\s*function|(?:async\s+)?([\w$]+)\s*\([^)]*\)\s*{)/g;
+  let match;
+  while ((match = functionRegex.exec(code)) !== null) {
+    const functionName = match[1] || match[2] || match[3] || match[4];
+    if (functionName && !functions.includes(functionName)) {
+      functions.push(functionName);
+    }
+  }
+  
+  // Extract class declarations
+  const classRegex = /class\s+([\w$]+)(?:\s+extends\s+([\w$]+))?/g;
+  while ((match = classRegex.exec(code)) !== null) {
+    classes.push(match[1] + (match[2] ? ` (extends ${match[2]})` : ''));
+  }
+  
+  // Extract imports
+  const importRegex = /import\s+(?:{[^}]*}|[\w$*]+)\s+from\s+['"']([^'"']+)['"']|require\s*\(['"']([^'"']+)['"']\)/g;
+  while ((match = importRegex.exec(code)) !== null) {
+    imports.push(match[1] || match[2]);
+  }
+  
+  // Look for key features
+  if (code.includes('useEffect')) keyFeatures.push('React hooks');
+  if (code.includes('useState')) keyFeatures.push('state management');
+  if (code.includes('fetch(') || code.includes('axios')) keyFeatures.push('API calls');
+  if (code.includes('async') && code.includes('await')) keyFeatures.push('asynchronous operations');
+  if (code.includes('try') && code.includes('catch')) keyFeatures.push('error handling');
+  if (code.includes('map(') || code.includes('filter(') || code.includes('reduce(')) keyFeatures.push('array operations');
+  if (code.includes('console.error') || code.includes('console.log')) keyFeatures.push('console logging');
+  if (code.includes('export')) keyFeatures.push('module exports');
+  
+  return {
+    language,
+    lineCount,
+    functions,
+    classes,
+    imports,
+    keyFeatures
+  };
+}
+
+/**
+ * Generate a fallback explanation with structured annotations for the UI
+ * This function returns both text and proper annotation objects for highlighting
+ */
+function generateFallbackWithAnnotations(code: string, language?: string): { text: string; annotations: { startLine: number; endLine: number; explanation: string }[] } {
+  // Split code into lines for analysis
+  const lines = code.split('\n');
+  const lineCount = lines.length;
+  
+  // Initialize a short, meaningful explanation
+  let explanation = "";
+  
+  // Store important line numbers we find during analysis
+  const importantLines: number[] = [];
+  
+  // Find important line numbers in the code (not hardcoded)
+  // Look for imports/requires (typically at the top)
+  const importLines = lines.findIndex(line => 
+    line.includes('import ') || line.includes('require('));
+  if (importLines !== -1) importantLines.push(importLines + 1);
+  
+  // Look for class definitions
+  const classLines: number[] = [];
+  lines.forEach((line, index) => {
+    if (line.includes('class ')) classLines.push(index + 1);
+  });
+  if (classLines.length > 0) importantLines.push(...classLines);
+  
+  // Look for function definitions
+  const functionLines: number[] = [];
+  lines.forEach((line, index) => {
+    if (line.includes('function ') || 
+        line.match(/[a-zA-Z0-9_]+\s*=\s*\(.*\)\s*=>/) ||
+        line.match(/[a-zA-Z0-9_]+\s*\(.*\)\s*{/)) {
+      functionLines.push(index + 1);
+    }
+  });
+  if (functionLines.length > 0) importantLines.push(...functionLines);
+  
+  // Look for control structures (if, for, while)
+  const controlLines: number[] = [];
+  lines.forEach((line, index) => {
+    if (line.includes('if (') || line.includes('for (') || line.includes('while (')) {
+      controlLines.push(index + 1);
+    }
+  });
+  if (controlLines.length > 0 && controlLines.length < 5) {
+    importantLines.push(...controlLines);
+  } else if (controlLines.length >= 5) {
+    // If too many control statements, just take a couple to keep explanation short
+    importantLines.push(controlLines[0], controlLines[controlLines.length - 1]);
+  }
+  
+  // Always include line 1 and last line for context
+  if (!importantLines.includes(1)) importantLines.push(1);
+  if (!importantLines.includes(lineCount)) importantLines.push(lineCount);
+  
+  // Sort lines in ascending order for proper flow
+  importantLines.sort((a, b) => a - b);
+  
+  // Keep only a reasonable number of lines to stay under TTS limit
+  const maxLines = Math.min(10, importantLines.length);
+  const selectedLines = importantLines.slice(0, maxLines);
+  
+  // Create structured annotations and text content
+  const annotations: { startLine: number; endLine: number; explanation: string }[] = [];
+  let explanationText = "Code Analysis (AI service unavailable)\n\n";
+  
+  // Generate explanation with the selected line markers
+  selectedLines.forEach(lineNum => {
+    const lineContent = lines[lineNum - 1]?.trim() || '';
+    let lineExplanation = '';
+    
+    // Create meaningful description based on line content
+    if (lineNum === 1) {
+      lineExplanation = `This ${language || 'code'} begins with ${lineContent.substring(0, 30)}...`;
+    } else if (lineContent.includes('import ') || lineContent.includes('require(')) {
+      lineExplanation = 'This line imports dependencies';
+    } else if (lineContent.includes('class ')) {
+      lineExplanation = 'This line defines a class';
+    } else if (lineContent.includes('function ') || 
+               lineContent.match(/[a-zA-Z0-9_]+\s*=\s*\(.*\)\s*=>/) ||
+               lineContent.match(/[a-zA-Z0-9_]+\s*\(.*\)\s*{/)) {
+      lineExplanation = 'This line defines a function';
+    } else if (lineContent.includes('if (')) {
+      lineExplanation = 'This line contains a conditional statement';
+    } else if (lineContent.includes('for (') || lineContent.includes('while (')) {
+      lineExplanation = 'This line contains a loop';
+    } else if (lineNum === lineCount) {
+      lineExplanation = 'End of the code analysis';
+    } else {
+      lineExplanation = 'This line contains code logic';
+    }
+    
+    // Add the line marker and explanation to text
+    explanationText += `[Line ${lineNum}] ${lineExplanation}.\n\n`;
+    
+    // Create a structured annotation object that directly maps to the expected format
+    // The UI expects startLine to be 0-indexed but our markers are 1-indexed
+    annotations.push({
+      startLine: lineNum - 1, // Convert to 0-based indexing for UI
+      endLine: lineNum - 1,   // Convert to 0-based indexing for UI
+      explanation: lineExplanation + '.'
+    });
+  });
+  
+  // Add a note about the fallback service
+  explanationText += "Note: AI service unavailable. Using basic code analysis.";
+  
+  return { text: explanationText, annotations };
+}
+
+/**
+ * Explains code using Gemini API
+ */
+export const explainCode = async (
+  request: CodeExplanationRequest
+): Promise<GeminiResponse> => {
+  try {
+    const { code, language = 'javascript', request: userRequest = 'Explain this code' } = request;
+    
+    console.log('Explaining code with content:', { codeLength: code?.length, language });
+    
+    const prompt = `
+You are an AI code tutor. Explain the EXACT code below in detail. DO NOT explain a generic example - only explain THIS specific code:
+
+\`\`\`${language}
+${code}
+\`\`\`
+
+RESTRICTIONS:
+1. DO NOT MAKE UP CODE - only explain the exact code provided above
+2. DO NOT provide a generic explanation - analyze this specific implementation
+3. Reference specific line numbers when explaining the code
+4. Provide a detailed breakdown of what each important part of the code does
+
+Your analysis should include:
+1. What the code does overall
+2. Key functions and their purpose
+3. Any important patterns or techniques used
+
+FOLLOW THESE INSTRUCTIONS PRECISELY. The user depends on accurate explanation of their actual code.
+`;
+
+    // Construct the request body for the Gemini API
+    const requestBody = {
+      contents: [
+        {
+          parts: [
+            {
+              text: prompt
+            }
+          ]
+        }
+      ]
+    };
+    
+    // Use the retry mechanism for API calls
+    const response = await callGeminiWithRetry(requestBody);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Gemini API error:', errorText);
+      
+      // If the model is overloaded (503 error) or API key is invalid (400 error), provide a fallback explanation with line markers for TTS
+      if (response.status === 503 || response.status === 400) {
+        console.log(`Gemini API ${response.status === 503 ? "overloaded (503)" : "authentication error (400)"}, using enhanced fallback with line markers for TTS highlighting`);
+        return { 
+          ...generateFallbackWithAnnotations(code, language)
+        };
+      }
+      
+      return { text: `AI service unavailable (${response.status}). Please try again later.` };
+    }
+
+    const data = await response.json();
+    return parseResponse(data);
+  } catch (error) {
+    console.error('Error calling Gemini API:', error);
+    return { text: "Error connecting to the AI service." };
+  }
+};
+
+/**
+ * Reads code aloud using Gemini API
+ * This generates a narrative explanation suitable for text-to-speech
+ */
+export const readCodeAloud = async (
+  request: CodeExplanationRequest
+): Promise<GeminiResponse> => {
+  try {
+    const { code, language = 'javascript' } = request;
+    console.log('Reading code aloud with content:', { codeLength: code?.length, language });
+    
+    const prompt = `
+You are an AI code tutor. Generate a narrative explanation of the EXACT code below. DO NOT explain a generic example - only explain THIS specific code:
+
+\`\`\`${language}
+${code}
+\`\`\`
+
+RESTRICTIONS:
+1. DO NOT MAKE UP CODE - only explain the exact code provided above
+2. DO NOT provide a generic explanation - analyze this specific implementation
+3. For each section you explain, first say "[Line X]" where X is the line number you're referring to
+4. Use natural, conversational language as if you're tutoring someone verbally
+5. Pause between explanations of different sections with "..." to create natural breaks
+6. Use a friendly, engaging tone suitable for a tutor
+7. Break complex explanations into shorter, clearer segments
+8. Your explanation will be read aloud, so structure it to be easy to follow when spoken
+
+FORMAT YOUR EXPLANATION LIKE THIS:
+"Let me walk you through this code...
+
+[Line 1] This line does X... It's important because...
+
+[Line 3] Next, we see Y... This connects to the previous part by..."
+
+FOLLOW THESE INSTRUCTIONS PRECISELY. The user depends on accurate explanation of their actual code that is properly highlighted as you speak.
+`;
+
+    // Construct the request body for the Gemini API
+    const requestBody = {
+      contents: [
+        {
+          parts: [
+            {
+              text: prompt
+            }
+          ]
+        }
+      ]
+    };
+    
+    // Use the retry mechanism for API calls
+    const response = await callGeminiWithRetry(requestBody);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Gemini API error:', errorText);
+      
+      // If the model is overloaded (503 error) or API key is invalid (400 error), provide a fallback explanation with line markers for TTS
+      if (response.status === 503 || response.status === 400) {
+        console.log(`Gemini API ${response.status === 503 ? "overloaded (503)" : "authentication error (400)"}, using enhanced fallback with line markers for TTS highlighting`);
+        return { 
+          ...generateFallbackWithAnnotations(code, language)
+        };
+      }
+      
+      return { text: `AI service unavailable (${response.status}). Please try again later.` };
+    }
+
+    const data = await response.json();
+    return parseResponse(data);
+  } catch (error) {
+    console.error('Error calling Gemini API:', error);
+    return { text: "Error connecting to the AI service." };
+  }
+};
+
+/**
+ * Answers a question about specific code
+ */
+export const answerCodeQuestion = async (
+  code: string,
+  question: string,
+  language: string = 'javascript',
+  highlightedCode?: string
+): Promise<GeminiResponse> => {
+  try {
+    console.log('Answering question about code:', { codeLength: code?.length, language, question });
+    
+    let prompt = `
+I have a question about this code:
+
+\`\`\`${language}
+${code}
+\`\`\`
+
+My question is: ${question}
+`;
+
+    if (highlightedCode) {
+      prompt += `\nSpecifically, I'm asking about this part:\n\`\`\`${language}\n${highlightedCode}\n\`\`\``;
+    }
+    
+    prompt += `\n\nPlease answer my specific question in detail, referring to line numbers where appropriate. If you need to explain a concept, include short examples.`;
+
+    // Construct the request body for the Gemini API
+    const requestBody = {
+      contents: [
+        {
+          parts: [
+            {
+              text: prompt
+            }
+          ]
+        }
+      ]
+    };
+    
+    // Use the retry mechanism for API calls
+    const response = await callGeminiWithRetry(requestBody);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Gemini API error:', errorText);
+      
+      // If the model is overloaded (503 error) or API key is invalid (400 error), provide a fallback explanation with line markers for TTS
+      if (response.status === 503 || response.status === 400) {
+        console.log(`Gemini API ${response.status === 503 ? "overloaded (503)" : "authentication error (400)"}, using enhanced fallback with line markers for TTS highlighting`);
+        return { 
+          ...generateFallbackWithAnnotations(code, language)
+        };
+      }
+      
+      return { text: `AI service unavailable (${response.status}). Please try again later.` };
+    }
+
+    const data = await response.json();
+    return parseResponse(data);
+  } catch (error) {
+    console.error('Error calling Gemini API:', error);
+    return { text: "Error connecting to the AI service." };
+  }
+};

@@ -1,0 +1,1 @@
+'use client';\n\nimport React from 'react';\n\nexport default function Home() {\n  return (

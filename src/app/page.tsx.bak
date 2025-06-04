@@ -1,0 +1,503 @@
+'use client';
+
+import React, { useState, useEffect, useRef } from 'react';
+import Editor, { loader } from '@monaco-editor/react';
+import FileExplorer from '../components/FileExplorer';
+import AIAssistant from '../components/AIAssistant';
+import speechService from '../services/speechService';
+
+export default function Home() {
+  // State for panel widths
+  const [activityBarWidth, setActivityBarWidth] = useState(48);
+  const [explorerPanelWidth, setExplorerPanelWidth] = useState(280);
+  const [rightPanelWidth, setRightPanelWidth] = useState(400);
+  
+  // File and editor state
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [editorContent, setEditorContent] = useState("// Select a file from the explorer to edit");
+  const [language, setLanguage] = useState("javascript");
+  
+  // File contents storage - maps file paths to their content
+  const [fileContents, setFileContents] = useState<Record<string, string>>({
+    "/my-project/main.js": "// Welcome to Glyssa!\n\nfunction greet() {\n  console.log(\"Hello from Glyssa!\");\n}\n\ngreet();"
+  });
+  
+  // UI state
+  const [showNewProjectModal, setShowNewProjectModal] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [highlightedLine, setHighlightedLine] = useState<number>(-1);
+  const [selectedCodeRange, setSelectedCodeRange] = useState<{start: number, end: number} | null>(null);
+  const [highlightedCode, setHighlightedCode] = useState<string>("");
+  
+  const editorRef = useRef<any>(null);
+  
+  // Handle file selection from explorer
+  const handleFileSelect = (filePath: string) => {
+    // Save current editor content to the current file (if any)
+    if (selectedFile) {
+      setFileContents(prev => ({
+        ...prev,
+        [selectedFile]: editorContent
+      }));
+    }
+    
+    setSelectedFile(filePath);
+    
+    // Determine language based on file extension
+    const extension = filePath.split('.').pop()?.toLowerCase() || '';
+    
+    switch (extension) {
+      case 'js':
+        setLanguage('javascript');
+        break;
+      case 'ts':
+      case 'tsx':
+        setLanguage('typescript');
+        break;
+      case 'py':
+        setLanguage('python');
+        break;
+      case 'java':
+        setLanguage('java');
+        break;
+      case 'c':
+      case 'cpp':
+      case 'h':
+        setLanguage('cpp');
+        break;
+      case 'html':
+        setLanguage('html');
+        break;
+      case 'css':
+        setLanguage('css');
+        break;
+      case 'json':
+        setLanguage('json');
+        break;
+      default:
+        setLanguage('plaintext');
+    }
+    
+    // Get content from our fileContents map or create default content if it's a new file
+    if (fileContents[filePath]) {
+      setEditorContent(fileContents[filePath]);
+    } else {
+      // Default content for new files
+      const defaultContent = `// ${filePath}\n// Created: ${new Date().toLocaleString()}\n\n`;
+      
+      // Add some helpful starter code based on file type
+      let starterCode = '';
+      if (extension === 'js') {
+        starterCode = `function main() {\n  console.log("Hello world!");\n}\n\nmain();`;
+      } else if (extension === 'py') {
+        starterCode = `def main():\n    print("Hello world!")\n\nif __name__ == "__main__":\n    main()`;
+      } else if (extension === 'html') {
+        starterCode = `<!DOCTYPE html>\n<html>\n<head>\n  <title>My Page</title>\n</head>\n<body>\n  <h1>Hello World!</h1>\n</body>\n</html>`;
+      }
+      
+      const newContent = defaultContent + starterCode;
+      
+      // Save to our file contents map
+      setFileContents(prev => ({
+        ...prev,
+        [filePath]: newContent
+      }));
+      
+      setEditorContent(newContent);
+    }
+  };
+
+  // Define custom Monaco Editor theme
+  useEffect(() => {
+    // Wait for Monaco to be loaded
+    // @ts-ignore
+    loader.init().then(monaco => {
+      // Define a custom theme with only black/gray/purple (no blue)
+      monaco.editor.defineTheme('black-theme', {
+        base: 'vs-dark',
+        inherit: false, // Don't inherit from base theme
+        rules: [
+          // Base token colors
+          { token: '', foreground: '#CCCCCC', background: '#1E1E1E' },
+          { token: 'invalid', foreground: '#FF5370' },
+          { token: 'emphasis', fontStyle: 'italic' },
+          { token: 'strong', fontStyle: 'bold' },
+
+          // No blue anywhere - using grayscale with accent colors
+          { token: 'keyword', foreground: '#C792EA' },       // purple
+          { token: 'keyword.control', foreground: '#C792EA' }, // purple
+          { token: 'keyword.operator', foreground: '#A9A9A9' }, // gray
+          { token: 'string', foreground: '#C3E88D' },          // green
+          { token: 'string.escape', foreground: '#C3E88D' },   // green
+          { token: 'constant', foreground: '#BBBBBB' },        // light gray
+          { token: 'constant.numeric', foreground: '#F78C6C' }, // orange
+          { token: 'constant.language', foreground: '#C792EA' }, // purple
+          { token: 'constant.character', foreground: '#C792EA' }, // purple
+          { token: 'variable', foreground: '#DDDDDD' },          // white-ish
+          { token: 'variable.language', foreground: '#AAAAAA' }, // gray
+          { token: 'variable.predefined', foreground: '#AAAAAA' }, // gray
+          { token: 'comment', foreground: '#676B79' },           // dark gray
+          { token: 'function', foreground: '#C792EA' },          // purple
+          { token: 'type', foreground: '#A9A9A9' },              // gray
+          { token: 'tag', foreground: '#C792EA' },               // purple
+          { token: 'attribute', foreground: '#A9A9A9' },         // gray
+          { token: 'number', foreground: '#F78C6C' }             // orange
+        ],
+        colors: {
+          'editor.foreground': '#CCCCCC',
+          'editor.background': '#1E1E1E',
+          'editor.selectionBackground': '#333333',
+          'editor.lineHighlightBackground': '#2A2A2A',
+          'editorCursor.foreground': '#AAAAAA',
+          'editorWhitespace.foreground': '#3A3A3A',
+          'editorLineNumber.foreground': '#555555'
+        }
+      });
+    });
+  }, []);
+
+  // Handle resizing
+  const startActivityResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = activityBarWidth;
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = Math.max(48, Math.min(80, startWidth + (e.clientX - startX)));
+      setActivityBarWidth(newWidth);
+    };
+    
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+  
+  const startExplorerResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = explorerPanelWidth;
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = Math.max(100, startWidth + (e.clientX - startX));
+      setExplorerPanelWidth(newWidth);
+    };
+    
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+  
+  const startMainResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = rightPanelWidth;
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      const windowWidth = window.innerWidth;
+      const mainContentWidth = windowWidth - activityBarWidth - explorerPanelWidth - rightPanelWidth;
+      const deltaX = startX - e.clientX;
+      const newWidth = Math.max(200, startWidth + deltaX);
+      setRightPanelWidth(newWidth);
+    };
+    
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+  
+  // Handler for new project creation
+  const handleCreateNewProject = () => {
+    if (newProjectName.trim()) {
+      const newFilePath = `/my-project/${newProjectName}.js`;
+      const newContent = `// New project: ${newProjectName}\n\n// Created on: ${new Date().toLocaleString()}\n\n// Start coding here`;
+      
+      // Save to our file contents map
+      setFileContents(prev => ({
+        ...prev,
+        [newFilePath]: newContent
+      }));
+      
+      setEditorContent(newContent);
+      setSelectedFile(newFilePath);
+      setShowNewProjectModal(false);
+      setNewProjectName("");
+    }
+  };
+
+  return (
+    <div className="flex h-screen w-full overflow-hidden bg-zinc-950">
+      {/* New Project Modal */}
+      {showNewProjectModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-zinc-900 rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-xl font-medium text-zinc-200 mb-4">Create New Project</h3>
+            <label className="block text-sm text-zinc-400 mb-2">Project Name</label>
+            <input 
+              type="text" 
+              placeholder="my-project" 
+              className="w-full px-3 py-2 bg-zinc-800 text-zinc-200 rounded border border-zinc-700 focus:outline-none focus:border-zinc-500"
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleCreateNewProject()}
+            />
+            <div className="flex justify-end mt-4 space-x-2">
+              <button 
+                className="px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-zinc-200 transition-colors"
+                onClick={() => {
+                  setShowNewProjectModal(false);
+                  setNewProjectName("");
+                }}
+              >
+                Cancel
+              </button>
+              <button 
+                className="px-3 py-1.5 text-xs font-medium text-zinc-200 bg-zinc-700 rounded hover:bg-zinc-600 transition-colors"
+                onClick={handleCreateNewProject}
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Main layout */}
+      <div className="flex h-full w-full">
+        {/* Activity bar (left-most) */}
+        <div className="flex-shrink-0 flex flex-col h-full bg-zinc-900 border-r border-zinc-800" style={{ width: `${activityBarWidth}px` }}>
+          <div className="flex flex-col items-center py-3">
+            <button className="w-8 h-8 rounded-md bg-zinc-800 flex items-center justify-center mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+            </button>
+            
+            <button className="w-8 h-8 rounded-md flex items-center justify-center mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </button>
+            
+            <button className="w-8 h-8 rounded-md flex items-center justify-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+              </svg>
+            </button>
+          </div>
+          
+          <div className="mt-auto">
+            <button className="w-8 h-8 rounded-md flex items-center justify-center mb-3 mx-auto" onClick={() => setShowNewProjectModal(true)}>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+              </svg>
+            </button>
+            
+            <button className="w-8 h-8 rounded-md flex items-center justify-center mb-3 mx-auto">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        
+        {/* Resizer for activity bar */}
+        <div className="w-[2px] h-full bg-black cursor-col-resize hover:bg-zinc-700 transition-colors" onMouseDown={startActivityResize}></div>
+        
+        {/* Explorer panel */}
+        <div style={{ width: `${explorerPanelWidth}px` }} className="flex-shrink-0 flex flex-col h-full bg-zinc-900 border-r border-zinc-800">
+          {/* Explorer header */}
+          <div className="p-3 border-b border-zinc-800 font-medium text-zinc-400 uppercase text-xs">
+            Explorer
+          </div>
+        
+          {/* File explorer tree */}
+          <FileExplorer onFileSelect={handleFileSelect} />
+        
+          {/* Bottom section with Outline and Timeline */}
+          <div className="mt-auto border-t border-zinc-800">
+            <div className="p-3 flex items-center justify-between">
+              <span className="font-medium text-zinc-400 uppercase text-xs">Structure</span>
+              <button className="text-zinc-500 hover:text-zinc-300">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        {/* Resizer for explorer panel */}
+        <div className="w-[2px] h-full bg-black cursor-col-resize hover:bg-zinc-700 transition-colors" onMouseDown={startExplorerResize}></div>
+        
+        {/* Editor main area */}
+        <div className="flex-1 flex flex-col h-full">
+          {/* Editor header with tabs */}
+          <div className="flex items-center border-b border-zinc-800 h-10 bg-zinc-900">
+            {selectedFile && (
+              <div className="px-4 h-full flex items-center border-r border-zinc-800 bg-zinc-950 text-zinc-300 text-sm">
+                {selectedFile.split('/').pop()}
+                <button className="ml-2 text-zinc-500 hover:text-zinc-300">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            )}
+            
+            <div className="ml-auto flex px-2">
+              <button 
+                className="p-2 text-zinc-500 hover:text-zinc-300 transition-colors"
+                onClick={() => {
+                  if (selectedFile && editorContent) {
+                    const blob = new Blob([editorContent], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = selectedFile ? selectedFile.split('/').pop() || 'exported-file.txt' : 'exported-file.txt';
+                    document.body.appendChild(a);
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                  }
+                }}
+              >
+                Export
+              </button>
+            </div>
+          </div>
+          
+          <div className="flex-1 overflow-hidden bg-zinc-900 p-0">
+            <Editor
+              height="100%"
+              language={language}
+              value={editorContent}
+              theme="black-theme"
+              className="overflow-hidden editor-container"
+              options={{
+                minimap: { enabled: false },
+                scrollBeyondLastLine: false,
+                fontFamily: 'monospace',
+                fontSize: 14,
+                lineNumbers: 'on',
+                renderLineHighlight: 'all',
+                padding: { top: 16, bottom: 16 },
+                scrollbar: {
+                  useShadows: false,
+                  verticalScrollbarSize: 10,
+                  horizontalScrollbarSize: 10
+                }
+              }}
+              onMount={(editor, monaco) => {
+                editorRef.current = editor;
+                
+                // Add selection change listener to capture highlighted code
+                editor.onDidChangeCursorSelection((e) => {
+                  if (e.selection.isEmpty()) return;
+                  
+                  const startLine = e.selection.startLineNumber - 1;
+                  const endLine = e.selection.endLineNumber - 1;
+                  setSelectedCodeRange({ start: startLine, end: endLine });
+                  
+                  const selectedText = editor.getModel()?.getValueInRange(e.selection) || "";
+                  setHighlightedCode(selectedText);
+                });
+              }}
+              onChange={(value) => {
+                if (value !== undefined) {
+                  setEditorContent(value);
+                  
+                  // Save to our file contents map when content changes
+                  if (selectedFile) {
+                    setFileContents(prev => {
+                      const updated = {
+                        ...prev,
+                        [selectedFile]: value
+                      };
+                      console.log('Updated file contents:', updated);
+                      return updated;
+                    });
+                  }
+                }
+              }}
+              // We don't need onDidScrollChange as we handle scrolling in the onHighlight function
+            />
+          </div>
+        </div>
+        
+        {/* Resizer for main content */}
+        <div className="w-[2px] h-full bg-black cursor-col-resize hover:bg-zinc-700 transition-colors" onMouseDown={startMainResize}></div>
+        
+        <div style={{ width: `${rightPanelWidth}px` }} className="flex-shrink-0 flex flex-col h-full bg-zinc-900 border-l border-zinc-800" id="right-panel">
+          {/* AI Chat content */}
+          <div className="p-6 border-b border-zinc-800 flex items-center justify-between">
+            <div className="flex items-center">
+              <div className="w-8 h-8 rounded-md bg-zinc-800 flex items-center justify-center mr-3">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="#fff">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                </svg>
+              </div>
+              <h2 className="text-xl font-bold text-zinc-200">Glyssa AI Tutor</h2>
+            </div>
+            <button className="p-2 text-zinc-500 hover:text-zinc-300 transition-colors">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="#fff">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+              </svg>
+            </button>
+          </div>
+          
+          <AIAssistant 
+            code={editorContent} // This should be the real-time content from the editor
+            language={language}
+            onHighlight={(lineNumber) => {
+              setHighlightedLine(lineNumber);
+              
+              // Highlight the line in the editor
+              if (editorRef.current) {
+                editorRef.current.revealLineInCenter(lineNumber + 1);
+                
+                // Create a decoration for the highlighted line
+                const decorations = editorRef.current.deltaDecorations(
+                  [],
+                  [{
+                    range: {
+                      startLineNumber: lineNumber + 1,
+                      endLineNumber: lineNumber + 1,
+                      startColumn: 1,
+                      endColumn: 1000
+                    },
+                    options: {
+                      isWholeLine: true,
+                      className: 'highlighted-line',
+                      inlineClassName: 'highlighted-text',
+                      stickiness: 1
+                    }
+                  }]
+                );
+                
+                // Clear decoration after a delay
+                setTimeout(() => {
+                  editorRef.current?.deltaDecorations(decorations, []);
+                }, 3000);
+              }
+            }}
+            highlightedCode={highlightedCode}
+            highlightedLines={selectedCodeRange || undefined}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
