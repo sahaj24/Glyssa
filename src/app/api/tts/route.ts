@@ -191,12 +191,48 @@ export async function POST(request: NextRequest) {
           // Validate base64 string
           if (base64Audio.length % 4 !== 0) {
             console.warn('Generated base64 string length is not a multiple of 4, which may indicate corruption');
+            // Fix padding if needed
+            const paddingNeeded = 4 - (base64Audio.length % 4);
+            if (paddingNeeded < 4) {
+              const paddedBase64 = base64Audio + '='.repeat(paddingNeeded);
+              console.log('Fixed base64 padding, new length:', paddedBase64.length);
+              base64Audio = paddedBase64;
+            }
+          }
+          
+          // Validate base64 characters
+          const isValidBase64 = /^[A-Za-z0-9+/=]+$/.test(base64Audio);
+          if (!isValidBase64) {
+            console.error('Invalid characters detected in base64 audio data');
+            return NextResponse.json(
+              { error: 'Corrupted audio data generated', success: false },
+              { status: 500 }
+            );
           }
           
           // Log a preview of the base64 data for debugging
           console.log('Base64 preview:', 
             `Start: ${base64Audio.substring(0, 20)}...`, 
             `End: ...${base64Audio.substring(base64Audio.length - 20)}`);
+          
+          // Verify the base64 can be decoded back to binary
+          try {
+            const testBuffer = Buffer.from(base64Audio, 'base64');
+            if (testBuffer.length < 100) {
+              console.error('Decoded test buffer is too small, indicating corrupted base64');
+              return NextResponse.json(
+                { error: 'Corrupted audio data generated', success: false },
+                { status: 500 }
+              );
+            }
+            console.log('Base64 validation successful, decoded length:', testBuffer.length);
+          } catch (decodeError) {
+            console.error('Failed to decode base64 for validation:', decodeError);
+            return NextResponse.json(
+              { error: 'Failed to validate audio data', success: false },
+              { status: 500 }
+            );
+          }
           
           return NextResponse.json({
             audio: base64Audio,

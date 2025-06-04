@@ -356,7 +356,14 @@ async function synthesizeSpeech(text: string, voiceOptions: VoiceOptions = defau
     }
 
     // Parse the response as JSON to get the audio data
-    const responseData = await response.json();
+    let responseData;
+    try {
+      responseData = await response.json();
+    } catch (jsonError) {
+      console.error('Failed to parse TTS API response as JSON:', jsonError);
+      recordFailure('Invalid JSON response from API');
+      return `tts-fallback-${Date.now()}`; // Return fallback ID
+    }
 
     if (responseData.success && responseData.audio && responseData.audio.length > 0) {
       console.log('TTS API response received successfully, audio data length:', responseData.audio.length);
@@ -365,13 +372,31 @@ async function synthesizeSpeech(text: string, voiceOptions: VoiceOptions = defau
       // Validate the base64 string
       if (responseData.audio.length % 4 !== 0) {
         console.warn('TTS API response: Base64 data length is not a multiple of 4, which may indicate corruption');
+        // Try to fix padding if possible
+        const paddingNeeded = 4 - (responseData.audio.length % 4);
+        if (paddingNeeded < 4) {
+          responseData.audio = responseData.audio + '='.repeat(paddingNeeded);
+          console.log('Added padding to base64 data, new length:', responseData.audio.length);
+        }
       }
       
       // Check if the base64 string contains valid characters
       const base64Regex = /^[A-Za-z0-9+/=]+$/;
       if (!base64Regex.test(responseData.audio)) {
-        console.warn('TTS API response: Base64 data contains invalid characters');
+        console.error('TTS API response: Base64 data contains invalid characters');
         recordFailure('Invalid base64 characters in audio data');
+        return `tts-fallback-${Date.now()}`; // Return fallback ID
+      }
+      
+      // Validate that the base64 can be decoded
+      try {
+        // Test decoding a small portion of the base64 string
+        const testSample = responseData.audio.substring(0, 100);
+        atob(testSample);
+        console.log('Base64 validation successful');
+      } catch (decodeError) {
+        console.error('Failed to validate base64 data:', decodeError);
+        recordFailure('Invalid base64 encoding');
         return `tts-fallback-${Date.now()}`; // Return fallback ID
       }
       
@@ -490,7 +515,7 @@ function playSpeech(audioIdOrData: string | ArrayBuffer, text: string, lineMarke
             URL.revokeObjectURL(url);
             // Fall back to browser TTS
             useBrowserSpeechAPI(text, speechState, lineMarkers);
-          });}
+          });
         } catch (error) {
           console.error('Google TTS: Error processing base64 audio data:', error);
           useBrowserSpeechAPI(text, speechState, lineMarkers);
@@ -613,10 +638,7 @@ function playSpeech(audioIdOrData: string | ArrayBuffer, text: string, lineMarke
         // Fall back to Web Speech API
         useBrowserSpeechAPI(text, speechState, lineMarkers);
       });
-    } else {
-      // Fallback to browser's Web Speech API
-      console.log('Using Web Speech API fallback for TTS');
-      useBrowserSpeechAPI(text, speechState, lineMarkers);
+
     }
   } catch (error) {
     console.error('Error in playSpeech:', error);
