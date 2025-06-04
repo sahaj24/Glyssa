@@ -46,3 +46,73 @@ body {
 .highlight-animation {
   animation: highlight-pulse 2s ease-in-out infinite;
 }
+
+/* Menu animation */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out forwards;
+}
+
+/* Button and input animations */
+@keyframes pulse-border {
+  0% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.4); }
+  70% { box-shadow: 0 0 0 6px rgba(139, 92, 246, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }
+}
+
+.pulse-animation:focus {
+  animation: pulse-border 2s infinite;
+}
+
+/* Subtle background animation */
+@keyframes subtle-movement {
+  0% { background-position: 0% 0%; }
+  50% { background-position: 100% 100%; }
+  100% { background-position: 0% 0%; }
+}
+
+.subtle-bg-animation {
+  background-size: 200% 200%;
+  animation: subtle-movement 15s ease infinite;
+}
+
+/* Login/Signup form animations */
+@keyframes slide-up {
+  0% { transform: translateY(10px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.4s ease-out forwards;
+}
+
+/* Button hover effect */
+@keyframes shine {
+  from {
+    background-position: 200% center;
+  }
+  to {
+    background-position: -200% center;
+  }
+}
+
+.shine-effect {
+  background-size: 200% auto;
+  background-clip: border-box;
+  background-image: linear-gradient(to right, transparent 20%, rgba(255, 255, 255, 0.2) 40%, rgba(255, 255, 255, 0.2) 60%, transparent 80%);
+  animation: shine 3s linear infinite;
+}
+
+/* Authentication form glow effect */
+.auth-form-glow {
+  box-shadow: 0 0 15px 2px rgba(124, 58, 237, 0.15);
+  transition: box-shadow 0.3s ease-out;
+}
+
+.auth-form-glow:hover {
+  box-shadow: 0 0 25px 5px rgba(124, 58, 237, 0.25);
+}

@@ -5,6 +5,7 @@ import Editor, { loader } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import FileExplorer from '../components/FileExplorer';
 import AIAssistant from '../components/AIAssistant';
+import Link from 'next/link';
 // speechService import removed as it's not used
 
 export default function Home() {
@@ -26,6 +27,7 @@ export default function Home() {
   // UI state
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
+  const [showUserMenu, setShowUserMenu] = useState(false);
   // highlightedLine state removed as it's not used
   const [selectedCodeRange, setSelectedCodeRange] = useState<{start: number, end: number} | null>(null);
   const [highlightedCode, setHighlightedCode] = useState<string>("");
@@ -33,6 +35,25 @@ export default function Home() {
   // Using a more specific type for the editor reference
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   
+  // User menu dropdown ref for click outside detection
+  const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // Handle clicks outside user menu to close the dropdown
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setShowUserMenu(false);
+      }
+    }
+
+    if (showUserMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showUserMenu]);
+
   // Handle file selection from explorer
   const handleFileSelect = (filePath: string) => {
     // Save current editor content to the current file (if any)
@@ -239,45 +260,9 @@ export default function Home() {
   };
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-zinc-950">
-      {/* New Project Modal */}
-      {showNewProjectModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-zinc-900 rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-xl font-medium text-zinc-200 mb-4">Create New Project</h3>
-            <label className="block text-sm text-zinc-400 mb-2">Project Name</label>
-            <input 
-              type="text" 
-              placeholder="my-project" 
-              className="w-full px-3 py-2 bg-zinc-800 text-zinc-200 rounded border border-zinc-700 focus:outline-none focus:border-zinc-500"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleCreateNewProject()}
-            />
-            <div className="flex justify-end mt-4 space-x-2">
-              <button 
-                className="px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-zinc-200 transition-colors"
-                onClick={() => {
-                  setShowNewProjectModal(false);
-                  setNewProjectName("");
-                }}
-              >
-                Cancel
-              </button>
-              <button 
-                className="px-3 py-1.5 text-xs font-medium text-zinc-200 bg-zinc-700 rounded hover:bg-zinc-600 transition-colors"
-                onClick={handleCreateNewProject}
-              >
-                Create
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      
-      {/* Main layout */}
-      <div className="flex h-full w-full">
-        {/* Activity bar (left-most) */}
+    <div className="flex flex-col h-screen bg-black text-white overflow-hidden">
+      <div className="flex h-full overflow-hidden">
+        {/* Activity bar */}
         <div className="flex-shrink-0 flex flex-col h-full bg-zinc-900 border-r border-zinc-800" style={{ width: `${activityBarWidth}px` }}>
           <div className="flex flex-col items-center py-3">
             <button className="w-8 h-8 rounded-md bg-zinc-800 flex items-center justify-center mb-3">
@@ -299,18 +284,62 @@ export default function Home() {
             </button>
           </div>
           
-          <div className="mt-auto">
-            <button className="w-8 h-8 rounded-md flex items-center justify-center mb-3 mx-auto" onClick={() => setShowNewProjectModal(true)}>
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="mt-auto flex flex-col items-center space-y-3 py-3">
+            {/* User account icon with dropdown menu */}
+            <div className="relative" ref={userMenuRef}>
+              <button 
+                onClick={() => setShowUserMenu(!showUserMenu)}
+                className="w-8 h-8 rounded-md flex items-center justify-center group"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-zinc-500 group-hover:text-purple-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                </svg>
+                <span className="absolute left-full ml-2 px-2 py-1 text-xs whitespace-nowrap rounded bg-zinc-800 text-zinc-300 opacity-0 group-hover:opacity-100 pointer-events-none">
+                  Account
+                </span>
+              </button>
+              
+              {/* User menu dropdown */}
+              {showUserMenu && (
+                <div className="absolute left-10 bottom-0 z-50 bg-zinc-800/90 backdrop-blur-sm border border-zinc-700/50 rounded-lg shadow-lg overflow-hidden w-40 animate-fade-in">
+                  <div className="py-2 px-3 border-b border-zinc-700/50">
+                    <p className="text-xs text-zinc-500 uppercase tracking-wider font-medium">Account</p>
+                  </div>
+                  <Link href="/login" className="flex items-center gap-2 px-4 py-2 text-sm text-zinc-300 hover:bg-purple-500/10 hover:text-purple-300 transition-all duration-200">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+                    </svg>
+                    Log In
+                  </Link>
+                  <Link href="/signup" className="flex items-center gap-2 px-4 py-2 text-sm text-zinc-300 hover:bg-purple-500/10 hover:text-purple-300 transition-all duration-200">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                    </svg>
+                    Sign Up
+                  </Link>
+                </div>
+              )}
+            </div>
+            
+            {/* Add new project button */}
+            <button className="w-8 h-8 rounded-md flex items-center justify-center group relative" onClick={() => setShowNewProjectModal(true)}>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-zinc-500 group-hover:text-zinc-300 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
               </svg>
+              <span className="absolute left-full ml-2 px-2 py-1 text-xs whitespace-nowrap rounded bg-zinc-800 text-zinc-300 opacity-0 group-hover:opacity-100 pointer-events-none">
+                New Project
+              </span>
             </button>
             
-            <button className="w-8 h-8 rounded-md flex items-center justify-center mb-3 mx-auto">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            {/* Settings button */}
+            <button className="w-8 h-8 rounded-md flex items-center justify-center group relative">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-zinc-500 group-hover:text-zinc-300 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
+              <span className="absolute left-full ml-2 px-2 py-1 text-xs whitespace-nowrap rounded bg-zinc-800 text-zinc-300 opacity-0 group-hover:opacity-100 pointer-events-none">
+                Settings
+              </span>
             </button>
           </div>
         </div>
