@@ -8,7 +8,7 @@ import fs from 'fs';
 
 // Use the service account key file path or environment variable
 // The service account key is loaded dynamically from a file or from credentials directly
-const keyFilePath = '/Users/sahaj/Documents/glyssa-v/glyssa/new-google-credentials.json';
+const keyFilePath = process.env.GOOGLE_CREDENTIALS_PATH || './new-google-credentials.json';
 console.log('Attempting to use credentials file at:', keyFilePath);
 
 // You can also set the GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable with the entire JSON content
